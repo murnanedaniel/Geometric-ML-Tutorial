@@ -615,7 +615,350 @@ def make_loss_gif(out_path: Path,
 def _hex_to_rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-def make_landscape_gif(out_path):  raise NotImplementedError
+# --------------------------------------------------------------------------
+# 01c — the loss landscape (attractive bowl + repulsive margin disk)
+# --------------------------------------------------------------------------
+
+def _teal_cmap():
+    """white -> teal linear cmap, for the attractive bowl."""
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list(
+        "teal_bowl", ["#FFFFFF", "#C8E8E1", "#5BB8AA", "#1F7A6E", "#0D4A42"]
+    )
+
+
+def _ember_cmap():
+    """white -> ember linear cmap, for the repulsive disk."""
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list(
+        "ember_disk", ["#FFFFFF", "#FCD6CE", "#F3866F", "#C8422B", "#7A2213"]
+    )
+
+
+def make_landscape_gif(out_path: Path,
+                       fps: int = DEFAULT_FPS,
+                       size: int = 720):
+    # Landscape grid (kept modest so GIF stays under ~6 MB).
+    X_LIM = 3.2
+    grid = 140
+    xs = np.linspace(-X_LIM, X_LIM, grid)
+    ys = np.linspace(-X_LIM, X_LIM, grid)
+    XX, YY = np.meshgrid(xs, ys)
+    D = np.sqrt(XX ** 2 + YY ** 2)
+
+    # 1-D cross-section grid (distance d from anchor).
+    ds = np.linspace(0, X_LIM, 400)
+
+    # ----------------------------------------------------------------------
+    # Layout: two panels (2-D heatmap, 1-D cross-section) + title/caption.
+    # ----------------------------------------------------------------------
+    fig = plt.figure(figsize=(9.0, 5.4), dpi=90)
+    gs = fig.add_gridspec(
+        1, 2, width_ratios=[1.0, 1.0],
+        wspace=0.12, left=0.05, right=0.97, top=0.79, bottom=0.18,
+    )
+    ax2d = fig.add_subplot(gs[0])
+    ax1d = fig.add_subplot(gs[1])
+
+    # 2-D panel: heatmap + anchor + margin outline.
+    ax2d.set_xlim(-X_LIM, X_LIM); ax2d.set_ylim(-X_LIM, X_LIM)
+    ax2d.set_aspect("equal")
+    ax2d.set_xticks([]); ax2d.set_yticks([])
+    for s in ("left", "right", "top", "bottom"):
+        ax2d.spines[s].set_visible(False)
+    ax2d.set_title("loss as a function of the free point's position",
+                   fontsize=11, color=MUTE, pad=6, loc="left")
+
+    # imshow artist — we'll swap data + cmap + vmax as chapters change
+    img = ax2d.imshow(
+        np.zeros_like(D),
+        origin="lower",
+        extent=[-X_LIM, X_LIM, -X_LIM, X_LIM],
+        cmap=_teal_cmap(),
+        vmin=0.0, vmax=X_LIM ** 2, zorder=0,
+    )
+    # anchor marker
+    ax2d.scatter([0], [0], s=520, c="white", edgecolors="none", zorder=2)
+    ax2d.scatter([0], [0], s=300, c=CLASS_COLORS[1],
+                 edgecolors="white", linewidths=2.4, zorder=3)
+    ax2d.text(0, -0.42, "anchor", ha="center", va="top",
+              fontsize=10, color=FG, zorder=4)
+
+    # Margin circle (chapter 2 only).
+    margin_ring = Circle((0, 0), 0.001, fill=False, color=FG,
+                         lw=1.8, ls="--", alpha=0.0, zorder=4)
+    ax2d.add_patch(margin_ring)
+    margin_radius_label = ax2d.text(0, 0, "", ha="center", va="bottom",
+                                    color=FG, fontsize=10, alpha=0.0, zorder=5)
+
+    # 1-D panel: cross-section curve.
+    ax1d.set_xlim(0, X_LIM)
+    ax1d.set_ylim(0, X_LIM ** 2 * 1.05)
+    ax1d.set_xlabel("distance $d$ from anchor", fontsize=10)
+    ax1d.set_ylabel("pair loss  $L$", fontsize=10)
+    ax1d.tick_params(labelsize=9)
+    for s in ("top", "right"):
+        ax1d.spines[s].set_visible(False)
+    ax1d.set_title("radial cross-section",
+                   fontsize=11, color=MUTE, pad=6, loc="left")
+
+    # 1-D curves.
+    curve_line, = ax1d.plot([], [], lw=3.0, color=CLASS_COLORS[1])
+    curve_fill = [None]   # mutable holder for the fill_between artist
+
+    def redraw_fill(ds_arr, L_arr, color):
+        if curve_fill[0] is not None:
+            curve_fill[0].remove()
+        curve_fill[0] = ax1d.fill_between(ds_arr, 0, L_arr,
+                                          color=color, alpha=0.18, zorder=1)
+
+    # Vertical dashed line marking the margin on the 1D plot (chapter 2 only).
+    m_vline = ax1d.axvline(0, color=FG, ls="--", lw=1.6, alpha=0.0)
+    m_vline_label = ax1d.text(0, 0, "", ha="left", va="bottom",
+                              color=FG, fontsize=10, alpha=0.0)
+    # Moving dot showing the current (d, L) point on the cross-section.
+    curve_dot = ax1d.scatter([], [], s=0, zorder=5)
+
+    # Headers (top) & footer (bottom, clear of the xlabel).
+    fig.text(0.5, 0.955, "The hinge-loss landscape",
+             ha="center", va="top", fontsize=15, fontweight="bold")
+    formula = fig.text(0.5, 0.905, "",
+                       ha="center", va="top", fontsize=13.5)
+    chapter = fig.text(0.5, 0.855, "",
+                       ha="center", va="top", fontsize=11, color=MUTE)
+    footer = fig.text(0.5, 0.025, "", ha="center", va="bottom",
+                      fontsize=10, color=FG)
+
+    # ----------------------------------------------------------------------
+    # Timing.
+    # ----------------------------------------------------------------------
+    T_ATTR   = 70          # chapter 1: attractive landscape
+    T_TRANS1 = 16          # cross-fade to chapter 2
+    T_MSWEEP = 120         # chapter 2: m-sweep (0.2 → 3.0 → 2.0)
+    T_POS    = 80          # chapter 3: free point orbits the anchor
+    T_HOLD   = 28          # final hold
+    TOTAL    = T_ATTR + T_TRANS1 + T_MSWEEP + T_POS + T_HOLD
+
+    # Precompute landscape data.
+    L_attr = D ** 2
+    L_attr_curve = ds ** 2
+
+    def L_rep_field(m):
+        return np.maximum(0.0, m - D) ** 2
+
+    def L_rep_curve(m):
+        return np.maximum(0.0, m - ds) ** 2
+
+    # m schedule for chapter 2 (ease out then back to 2.0)
+    m_sched = np.concatenate([
+        np.linspace(0.2, 3.0, int(T_MSWEEP * 0.55)),
+        np.linspace(3.0, 2.0, T_MSWEEP - int(T_MSWEEP * 0.55)),
+    ])
+
+    # Chapter-3 orbit: free point circles the anchor at r_orbit, cycling m=2.0.
+    M_FIXED = 2.0
+    orbit_t = np.linspace(0, 2 * np.pi, T_POS)
+    # Radius oscillates so we see the partner dip in and out of the margin.
+    r_orbit = 1.0 + 1.7 * (0.5 + 0.5 * np.sin(orbit_t * 1.0 - np.pi / 2))
+
+    def update(f):
+        # ------- Chapter 1: attractive landscape -------
+        if f < T_ATTR:
+            s = (f + 1) / T_ATTR
+            ease = _ease_inout(s)
+            # fade in the heatmap
+            img.set_cmap(_teal_cmap())
+            img.set_data(L_attr * ease)
+            img.set_clim(0, X_LIM ** 2)
+            img.set_alpha(ease)
+
+            # 1-D curve draws itself
+            k = int(ease * len(ds))
+            curve_line.set_data(ds[:k], L_attr_curve[:k])
+            curve_line.set_color(CLASS_COLORS[1])
+            redraw_fill(ds[:k], L_attr_curve[:k], CLASS_COLORS[1])
+            if k > 0:
+                curve_dot.set_offsets([[ds[k - 1], L_attr_curve[k - 1]]])
+                curve_dot.set_sizes([70])
+                curve_dot.set_color(CLASS_COLORS[1])
+                curve_dot.set_edgecolors("white")
+                curve_dot.set_linewidths(1.5)
+            ax1d.set_ylim(0, X_LIM ** 2 * 1.05)
+
+            # margin hidden
+            margin_ring.set_alpha(0); margin_radius_label.set_alpha(0)
+            m_vline.set_alpha(0); m_vline_label.set_alpha(0)
+
+            formula.set_text(r"$L^+(p)\;=\;\|p - a\|^2$")
+            chapter.set_text("chapter 1 — attractive landscape")
+            footer.set_text("same class: a quadratic bowl, no upper cap, "
+                            "no margin — always pulls.")
+            return
+
+        # ------- Cross-fade chapter 1 → chapter 2 -------
+        if f < T_ATTR + T_TRANS1:
+            s = (f - T_ATTR + 1) / T_TRANS1
+            # Fade teal bowl out, ember field in (at m = 0.2, basically nil).
+            m = 0.2
+            L_mix = (1 - s) * L_attr + s * L_rep_field(m)
+            img.set_cmap(_ember_cmap())
+            img.set_data(L_rep_field(m))
+            img.set_clim(0, 9)
+            img.set_alpha(s)
+            # 1-D: swap curves
+            curve = L_rep_curve(m)
+            curve_line.set_data(ds, curve)
+            curve_line.set_color(CLASS_COLORS[0])
+            curve_line.set_alpha(s)
+            redraw_fill(ds, curve, CLASS_COLORS[0])
+            curve_fill[0].set_alpha(0.18 * s)
+            curve_dot.set_sizes([0])
+            ax1d.set_ylim(0, X_LIM ** 2 * 1.05)
+
+            margin_ring.set_alpha(0.9 * s)
+            margin_ring.set_radius(m)
+            margin_radius_label.set_alpha(s)
+            margin_radius_label.set_position((0, m + 0.08))
+            margin_radius_label.set_text(f"m = {m:.2f}")
+            m_vline.set_xdata([m, m])
+            m_vline.set_alpha(0.9 * s)
+            m_vline_label.set_position((m + 0.06, X_LIM ** 2 * 0.92))
+            m_vline_label.set_alpha(s)
+            m_vline_label.set_text(r"$m$")
+
+            formula.set_text(r"$L^-(p)\;=\;\max(0,\; m - \|p - a\|)^2$")
+            chapter.set_text("switching to the repulsive branch…")
+            footer.set_text("")
+            return
+
+        # ------- Chapter 2: m-sweep over repulsive landscape -------
+        k_abs = f - T_ATTR - T_TRANS1
+        if k_abs < T_MSWEEP:
+            k = k_abs
+            m = m_sched[k]
+            L_field = L_rep_field(m)
+            L_curve = L_rep_curve(m)
+
+            img.set_cmap(_ember_cmap())
+            img.set_data(L_field)
+            # vmax scales with m so the colour range "fills" the disk.
+            img.set_clim(0, max(m ** 2, 0.3))
+            img.set_alpha(1.0)
+
+            curve_line.set_data(ds, L_curve)
+            curve_line.set_color(CLASS_COLORS[0])
+            curve_line.set_alpha(1.0)
+            redraw_fill(ds, L_curve, CLASS_COLORS[0])
+
+            # Mark the hinge kink.
+            curve_dot.set_offsets([[m, 0.0]])
+            curve_dot.set_sizes([80])
+            curve_dot.set_color(CLASS_COLORS[0])
+            curve_dot.set_edgecolors("white")
+            curve_dot.set_linewidths(1.5)
+            ax1d.set_ylim(0, max(9.5, m ** 2 * 1.2))
+
+            margin_ring.set_alpha(0.9)
+            margin_ring.set_radius(m)
+            margin_radius_label.set_alpha(1.0)
+            margin_radius_label.set_position((0, m + 0.08))
+            margin_radius_label.set_text(f"m = {m:.2f}")
+            m_vline.set_xdata([m, m])
+            m_vline.set_alpha(0.9)
+            m_vline_label.set_position((m + 0.06, ax1d.get_ylim()[1] * 0.9))
+            m_vline_label.set_alpha(1.0)
+            m_vline_label.set_text(r"$m$")
+
+            formula.set_text(r"$L^-(p)\;=\;\max(0,\; m - \|p - a\|)^2$")
+            chapter.set_text(f"chapter 2 — margin sweep  ($m = {m:.2f}$)")
+            footer.set_text(
+                "flat-zero outside the disk, quadratic bowl inside — "
+                "the hinge kink at $d = m$ is exactly the boundary."
+            )
+            return
+
+        # ------- Chapter 3: free point orbits at fixed m -------
+        k_abs2 = f - T_ATTR - T_TRANS1 - T_MSWEEP
+        if k_abs2 < T_POS:
+            k = k_abs2
+            m = M_FIXED
+            L_field = L_rep_field(m)
+            L_curve = L_rep_curve(m)
+
+            img.set_cmap(_ember_cmap())
+            img.set_data(L_field)
+            img.set_clim(0, m ** 2)
+            img.set_alpha(1.0)
+
+            # Place a "free point" orbiting the anchor.
+            r = r_orbit[k]
+            theta = orbit_t[k]
+            px, py = r * np.cos(theta), r * np.sin(theta)
+            L_here = max(0.0, m - r) ** 2
+
+            # Remove previous orbit artist (stored on ax2d as attribute).
+            if not hasattr(ax2d, "_orbit_dot"):
+                ax2d._orbit_dot = ax2d.scatter(
+                    [], [], s=220, c=CLASS_COLORS[0],
+                    edgecolors="white", linewidths=2.0, zorder=6)
+                ax2d._orbit_line, = ax2d.plot(
+                    [], [], ls=":", lw=1.2, color=FG, alpha=0.55, zorder=5)
+            ax2d._orbit_dot.set_offsets([[px, py]])
+            ax2d._orbit_line.set_data([0, px], [0, py])
+
+            # 1-D curve (static) with live dot.
+            curve_line.set_data(ds, L_curve)
+            curve_line.set_color(CLASS_COLORS[0])
+            curve_line.set_alpha(1.0)
+            redraw_fill(ds, L_curve, CLASS_COLORS[0])
+            curve_dot.set_offsets([[r, L_here]])
+            curve_dot.set_sizes([120])
+            curve_dot.set_color(CLASS_COLORS[0])
+            curve_dot.set_edgecolors("white")
+            curve_dot.set_linewidths(1.8)
+            ax1d.set_ylim(0, m ** 2 * 1.2)
+
+            margin_ring.set_alpha(0.9)
+            margin_ring.set_radius(m)
+            margin_radius_label.set_alpha(1.0)
+            margin_radius_label.set_position((0, m + 0.08))
+            margin_radius_label.set_text(f"m = {m:.2f}")
+            m_vline.set_xdata([m, m])
+            m_vline.set_alpha(0.9)
+            m_vline_label.set_position((m + 0.06, ax1d.get_ylim()[1] * 0.9))
+            m_vline_label.set_alpha(1.0)
+            m_vline_label.set_text(r"$m$")
+
+            formula.set_text(r"$L^-(p)\;=\;\max(0,\; m - \|p - a\|)^2$")
+            chapter.set_text("chapter 3 — a point orbits the anchor  "
+                             "(fixed $m$)")
+            inside = "inside" if r < m else "outside"
+            footer.set_text(
+                f"free point at $d = {r:.2f}$ ({inside} margin)  →  "
+                f"$L^- = {L_here:.2f}$"
+            )
+            return
+
+        # ------- Final hold -------
+        m = M_FIXED
+        r = r_orbit[-1]; theta = orbit_t[-1]
+        px, py = r * np.cos(theta), r * np.sin(theta)
+        L_here = max(0.0, m - r) ** 2
+        if hasattr(ax2d, "_orbit_dot"):
+            ax2d._orbit_dot.set_offsets([[px, py]])
+            ax2d._orbit_line.set_data([0, px], [0, py])
+        formula.set_text(r"$L^-(p)\;=\;\max(0,\; m - \|p - a\|)^2$")
+        chapter.set_text("the hinge loss has a flat zero zone and a bowl")
+        footer.set_text(
+            "the learned metric wants different-class points in the flat zone."
+        )
+
+    anim = animation.FuncAnimation(
+        fig, update, frames=TOTAL, interval=1000 / fps, blit=False
+    )
+    save_animation(anim, out_path, fps=fps)
+    plt.close(fig)
+    print(f"wrote {out_path}  ({TOTAL} frames, {fps} fps, no loop)")
 def make_mining_gif(out_path):     raise NotImplementedError
 def make_training_gif(out_path):   raise NotImplementedError
 
