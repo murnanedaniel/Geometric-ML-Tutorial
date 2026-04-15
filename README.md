@@ -100,8 +100,8 @@ Two version pins are **required** for notebook 02:
 **Expected results** (verified end-to-end run):
 - Toy message-passing walk-through prints every intermediate tensor
 - `GCNFromScratch` matches PyG's `GCNConv` with max abs diff = 0
-- GlassGNN trains to ~72% validation accuracy (ROC AUC ~0.66) — deliberately modest, to motivate the Random Forest baseline comparison
-- Random Forest on 100+ hand-crafted Magpie features: ~90% accuracy, 0.95 AUC — a healthy reminder that baselines matter
+- GlassGNN (18 raw node features, 3 GCN layers, class-weighted BCE): **~78.5% test acc, 0.81 AUC** (non-glass recall 0.53 — not collapsing to majority class)
+- Random Forest on 130+ hand-crafted Magpie features: **~90% accuracy, 0.95 AUC** — RF wins on this composition-only task, which is an honest and pedagogically useful outcome (Magpie features *are* the aggregate statistics the GNN is trying to learn; the GNN's payoff would come when structure information is available)
 - CHGNet evaluates crystalline metallic phase energies and relaxes a distorted CuZr B2 to convergence in ~14 BFGS steps
 
 **Runtime.** ~10 minutes on CPU.
