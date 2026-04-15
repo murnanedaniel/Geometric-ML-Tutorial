@@ -1,8 +1,11 @@
 # === Geometric ML Tutorial — dependencies ===
-# Tested on Python 3.10–3.11
+# Tested end-to-end on Python 3.11 with the exact versions below.
+# Other version ranges are usually fine — the pins below are known-good.
 
-# Core
-numpy>=1.24
+# Core scientific stack
+# IMPORTANT: numpy must be <2 because matminer imports a cython-compiled pymatgen
+# submodule that was built against numpy 1.x.
+numpy>=1.24,<2
 pandas>=2.0
 matplotlib>=3.7
 scikit-learn>=1.3
@@ -13,15 +16,17 @@ torch>=2.0
 torch_geometric>=2.4
 networkx>=3.0
 
-# Notebook 02 (metallic glass GNN): materials informatics stack
-# matminer pulls in pymatgen automatically
-matminer>=0.9
-pymatgen>=2024.1
-# CHGNet provides the pretrained universal potential for Part B of notebook 02
-chgnet>=0.4
-# ase is required for structural relaxation (CHGNet's ASE calculator)
+# Notebook 02 (metallic glass GNN): materials informatics stack.
+# matminer 0.9.3+ is required for Z<=118 compatibility with modern pymatgen.
+matminer>=0.9.3
+# pymatgen 2024.6.10 is the last version matminer cleanly works with out of the box;
+# newer versions remove internals matminer depends on (e.g., _pt_data).
+pymatgen==2024.6.10
+# CHGNet universal interatomic potential (pretrained) for Part B of notebook 02.
+chgnet>=0.3
+# ASE is used by CHGNet's structural-relaxation calculator.
 ase>=3.22
 
-# Jupyter (only needed if running the notebooks locally; Colab has them preinstalled)
+# Jupyter (only needed if running locally; Colab has them preinstalled)
 jupyter>=1.0
 ipykernel>=6.25
