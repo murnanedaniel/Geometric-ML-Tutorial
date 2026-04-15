@@ -22,6 +22,39 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.animation import PillowWriter
 from matplotlib.patches import Circle
+from PIL import Image
+
+# --------------------------------------------------------------------------
+# Global animation settings
+# --------------------------------------------------------------------------
+
+# ~50% slower than a standard 24 fps gif, and every gif in this file plays
+# through exactly once (no loop).
+DEFAULT_FPS = 14
+
+
+class PillowWriterNoLoop(PillowWriter):
+    """PillowWriter that writes a GIF with no Netscape loop extension.
+
+    matplotlib's PillowWriter hard-codes `loop=0` (infinite loop) when it
+    dumps the GIF. We override `finish` to omit the loop keyword entirely,
+    which produces a GIF that plays through exactly once in every major
+    decoder (browsers, GitHub, Quick Look).
+    """
+
+    def finish(self):
+        self._frames[0].save(
+            self.outfile,
+            save_all=True,
+            append_images=self._frames[1:],
+            duration=int(1000 / self.fps),
+            # deliberately no `loop` kwarg: no Netscape extension is written
+        )
+
+
+def save_animation(anim, out_path: Path, fps: int = DEFAULT_FPS):
+    """Save a matplotlib FuncAnimation as a single-play (non-looping) GIF."""
+    anim.save(out_path, writer=PillowWriterNoLoop(fps=fps))
 
 # --------------------------------------------------------------------------
 # Style
@@ -89,7 +122,7 @@ def spiral_galaxy(n_per_arm: int = 180,
 # --------------------------------------------------------------------------
 
 def make_dataset_gif(out_path: Path,
-                     fps: int = 24,
+                     fps: int = DEFAULT_FPS,
                      size: int = 720):
     X, y = spiral_galaxy(n_per_arm=220, seed=0)
 
@@ -249,9 +282,9 @@ def make_dataset_gif(out_path: Path,
     anim = animation.FuncAnimation(
         fig, update, frames=total, interval=1000 / fps, blit=False
     )
-    anim.save(out_path, writer=PillowWriter(fps=fps))
+    save_animation(anim, out_path, fps=fps)
     plt.close(fig)
-    print(f"wrote {out_path}  ({total} frames, {fps} fps)")
+    print(f"wrote {out_path}  ({total} frames, {fps} fps, no loop)")
 
 
 # --------------------------------------------------------------------------
