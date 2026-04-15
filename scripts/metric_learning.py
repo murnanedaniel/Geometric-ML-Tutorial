@@ -959,7 +959,350 @@ def make_landscape_gif(out_path: Path,
     save_animation(anim, out_path, fps=fps)
     plt.close(fig)
     print(f"wrote {out_path}  ({TOTAL} frames, {fps} fps, no loop)")
-def make_mining_gif(out_path):     raise NotImplementedError
+# --------------------------------------------------------------------------
+# 01d — hard negative mining
+# --------------------------------------------------------------------------
+
+def make_mining_gif(out_path: Path,
+                    fps: int = DEFAULT_FPS,
+                    size: int = 720):
+    from matplotlib.patches import FancyArrowPatch
+
+    M = 2.0
+    LR = 0.45           # gradient step size (visual)
+
+    # ----------------------------------------------------------------------
+    # Scene: anchor at origin, 24 random negatives.  We tilt the random
+    # draw so ~10 land inside the margin (hard) and ~14 outside (easy).
+    # ----------------------------------------------------------------------
+    rng = np.random.default_rng(7)
+    N_NEG = 24
+    pos = rng.uniform(-3.2, 3.2, size=(N_NEG, 2))
+    d0 = np.linalg.norm(pos, axis=1)
+    order = np.argsort(d0)
+    HARD_N = 10
+    for i in range(HARD_N):
+        idx = order[i]
+        r_t = rng.uniform(0.55, 1.9)
+        pos[idx] *= r_t / max(d0[idx], 1e-6)
+    for i in range(HARD_N, N_NEG):
+        idx = order[i]
+        r_t = rng.uniform(2.15, 3.25)
+        pos[idx] *= r_t / max(d0[idx], 1e-6)
+    d = np.linalg.norm(pos, axis=1)
+    L = np.maximum(0.0, M - d) ** 2
+
+    # Pick the top-K "hardest" (highest loss) to mine.
+    K = 3
+    topk = np.argsort(-L)[:K]
+    hard_mask = d < M
+
+    # ----------------------------------------------------------------------
+    # Figure layout — big square 2-D canvas on top, thin loss-bar strip.
+    # ----------------------------------------------------------------------
+    fig = plt.figure(figsize=(7.8, 8.6), dpi=100)
+    gs = fig.add_gridspec(
+        2, 1, height_ratios=[5.2, 1.2],
+        hspace=0.22, left=0.06, right=0.97, top=0.85, bottom=0.07,
+    )
+    ax = fig.add_subplot(gs[0])
+    ax_b = fig.add_subplot(gs[1])
+
+    ax.set_xlim(-3.6, 3.6); ax.set_ylim(-3.6, 3.6)
+    ax.set_aspect("equal")
+    ax.set_xticks([]); ax.set_yticks([])
+    for s in ("left", "right", "top", "bottom"):
+        ax.spines[s].set_visible(False)
+
+    # Margin disk + ring.
+    margin_disk = Circle((0, 0), M, color="#E85D4A", alpha=0.0, zorder=0)
+    margin_ring = Circle((0, 0), M, fill=False, color="#E85D4A",
+                         lw=1.6, ls="--", alpha=0.0, zorder=1)
+    ax.add_patch(margin_disk); ax.add_patch(margin_ring)
+    margin_label = ax.text(0, M + 0.12, "margin  m = 2.0",
+                           color="#B83A2B", fontsize=10,
+                           ha="center", va="bottom", alpha=0.0)
+
+    # Anchor — white halo + teal dot.
+    ax.scatter([0], [0], s=520, c="white", edgecolors="none", zorder=4)
+    ax.scatter([0], [0], s=300, c=CLASS_COLORS[1],
+               edgecolors="white", linewidths=2.4, zorder=5)
+    ax.text(0, -0.45, "anchor", ha="center", va="top",
+            fontsize=10, color=FG, zorder=5)
+
+    # Negative dots (scatter updated each frame).
+    scat = ax.scatter(np.zeros(N_NEG), np.zeros(N_NEG),
+                      s=np.full(N_NEG, 70.0),
+                      c=[CLASS_COLORS[0]] * N_NEG,
+                      edgecolors="white",
+                      linewidths=1.3, zorder=4)
+    # Red selection rings around the top-K mined.
+    ring_scat = ax.scatter([], [], s=[], facecolors="none",
+                           edgecolors="#DC2626", linewidths=2.8, zorder=5,
+                           alpha=0.0)
+
+    # Gradient arrows for the selected hard negatives (only drawn during step).
+    grad_arrows = []
+    for _ in range(K):
+        ga = FancyArrowPatch((0, 0), (0, 0),
+                             arrowstyle="-|>", mutation_scale=22,
+                             lw=2.5, color="#DC2626", zorder=5, alpha=0.0)
+        ax.add_patch(ga)
+        grad_arrows.append(ga)
+
+    # Loss bar strip.
+    ax_b.set_xlim(-0.5, N_NEG - 0.5)
+    ax_b.set_ylim(0, 1.1 * max(L.max(), 0.5))
+    ax_b.set_xticks([])
+    ax_b.tick_params(labelsize=9)
+    for s in ("top", "right"):
+        ax_b.spines[s].set_visible(False)
+    ax_b.set_ylabel("loss  $L^-$", fontsize=10)
+    # We sort negatives by descending loss for the bar chart x-axis.
+    sort_idx = np.argsort(-L)
+    bar_colors = np.array(["#D0D3D9"] * N_NEG)
+    for j in topk:
+        bar_colors[j] = "#DC2626"
+    # For others that are "hard but not mined", use ember.
+    for j in np.where(hard_mask)[0]:
+        if j not in topk:
+            bar_colors[j] = CLASS_COLORS[0]
+    bars = ax_b.bar(np.arange(N_NEG), L[sort_idx],
+                    color=bar_colors[sort_idx], edgecolor="white", lw=0.8)
+    bar_note = ax_b.text(0.01, 0.92, "", transform=ax_b.transAxes,
+                         ha="left", va="top", fontsize=10, color=FG)
+
+    # Headers.
+    fig.text(0.5, 0.955, "Hard negative mining",
+             ha="center", va="top", fontsize=15, fontweight="bold")
+    chapter = fig.text(0.5, 0.905, "",
+                       ha="center", va="top", fontsize=11, color=MUTE)
+    footer = fig.text(0.5, 0.02, "", ha="center", va="bottom",
+                      fontsize=10, color=FG)
+
+    # ----------------------------------------------------------------------
+    # Timing.
+    # ----------------------------------------------------------------------
+    T_SCATTER  = 42     # negatives scatter in
+    T_MEASURE  = 34     # loss encoding reveals easy vs hard
+    T_MINE     = 34     # spotlight top-K
+    T_STEP     = 54     # gradient step animates hards outward
+    T_HOLD     = 30
+    TOTAL      = T_SCATTER + T_MEASURE + T_MINE + T_STEP + T_HOLD
+
+    # Phase-1 start positions: all scatter in from random points off-canvas.
+    start_pos = rng.uniform(-5.0, 5.0, size=(N_NEG, 2))
+    # Guarantee they start well outside the visible area.
+    start_pos *= 1.8 / np.maximum(np.linalg.norm(start_pos, axis=1, keepdims=True),
+                                  1e-6) * 4.5
+
+    # Final post-gradient-step positions for the mined negatives.
+    step_end = pos.copy()
+    for j in topk:
+        u = pos[j] / max(d[j], 1e-6)
+        step_end[j] = pos[j] + LR * 2 * (M - d[j]) * u
+
+    # Helpers.
+    def loss_at(p):
+        d_ = np.linalg.norm(p, axis=1)
+        return np.maximum(0.0, M - d_) ** 2, d_
+
+    def dot_styles(L_arr, d_arr, fade_easy=False, select_hard=False):
+        """Return sizes and colors for each negative."""
+        sizes = np.full(N_NEG, 70.0)
+        colors = np.empty(N_NEG, dtype=object)
+        for j in range(N_NEG):
+            if d_arr[j] < M:            # hard
+                sizes[j]  = 90 + 70 * L_arr[j]
+                colors[j] = CLASS_COLORS[0]
+            else:                       # easy
+                sizes[j]  = 60
+                colors[j] = "#C8CBD1" if fade_easy else "#8A8F9B"
+        if select_hard:
+            for j in topk:
+                sizes[j] = 130 + 70 * L_arr[j]
+                colors[j] = "#DC2626"
+        return sizes, colors
+
+    def update(f):
+        # ---- Phase 1: scatter in ----
+        if f < T_SCATTER:
+            s = (f + 1) / T_SCATTER
+            e = _ease_inout(s)
+            p = start_pos * (1 - e) + pos * e
+            L_cur, d_cur = loss_at(p)
+
+            sizes, colors = dot_styles(L_cur, d_cur, fade_easy=False,
+                                       select_hard=False)
+            scat.set_offsets(p)
+            scat.set_sizes(sizes)
+            scat.set_facecolor(colors)
+
+            margin_disk.set_alpha(0.12 * e)
+            margin_ring.set_alpha(0.85 * e)
+            margin_label.set_alpha(e)
+
+            ring_scat.set_alpha(0.0)
+            for ga in grad_arrows:
+                ga.set_alpha(0.0)
+
+            chapter.set_text("many candidate negatives to choose from…")
+            footer.set_text("")
+            # Bars follow the scatter-in progress.
+            for i, b in enumerate(bars):
+                b.set_height(L_cur[sort_idx][i])
+                b.set_color("#D0D3D9")
+            bar_note.set_text("loss per negative (unsorted, all candidates)")
+            return
+
+        # ---- Phase 2: measure loss — easies fade, hards pop ----
+        if f < T_SCATTER + T_MEASURE:
+            s = (f - T_SCATTER + 1) / T_MEASURE
+            e = _ease_inout(s)
+
+            sizes, colors = dot_styles(L, d, fade_easy=False,
+                                       select_hard=False)
+            # Interpolate easies toward grey.
+            for j in range(N_NEG):
+                if not hard_mask[j]:
+                    # fade from mid-grey to light-grey
+                    sizes[j] = 60 - 10 * e
+            scat.set_offsets(pos)
+            scat.set_sizes(sizes)
+            scat.set_facecolor(colors)
+
+            ring_scat.set_alpha(0.0)
+            for ga in grad_arrows:
+                ga.set_alpha(0.0)
+
+            chapter.set_text("only negatives inside the margin carry gradient")
+            footer.set_text(
+                f"{hard_mask.sum()} of {N_NEG} candidates are hard  "
+                f"(loss > 0).  The rest contribute nothing."
+            )
+
+            # Bars: sort and recolor.
+            vals_sorted = L[sort_idx]
+            colors_sorted = np.array(["#D0D3D9"] * N_NEG, dtype=object)
+            for i, j in enumerate(sort_idx):
+                if hard_mask[j]:
+                    colors_sorted[i] = CLASS_COLORS[0]
+            for i, b in enumerate(bars):
+                b.set_height(vals_sorted[i])
+                b.set_color(colors_sorted[i])
+            bar_note.set_text("sorted by loss — easies (grey) give 0 signal")
+            return
+
+        # ---- Phase 3: mine the top-K ----
+        if f < T_SCATTER + T_MEASURE + T_MINE:
+            s = (f - T_SCATTER - T_MEASURE + 1) / T_MINE
+            e = _ease_inout(s)
+
+            sizes, colors = dot_styles(L, d, fade_easy=True,
+                                       select_hard=True)
+            scat.set_offsets(pos)
+            scat.set_sizes(sizes)
+            scat.set_facecolor(colors)
+
+            ring_scat.set_offsets(pos[topk])
+            ring_scat.set_sizes([220 + 40 * np.sin(np.pi * e)] * K)
+            ring_scat.set_alpha(0.9 * e)
+
+            for ga in grad_arrows:
+                ga.set_alpha(0.0)
+
+            chapter.set_text(f"pick the top-{K} hardest  →  mined negatives")
+            footer.set_text(
+                "hard-negative mining focuses the gradient on the "
+                "few examples that actually drive learning."
+            )
+
+            # Bars: top-K switch to red.
+            for i, j in enumerate(sort_idx):
+                if j in topk:
+                    bars[i].set_color("#DC2626")
+                elif hard_mask[j]:
+                    bars[i].set_color(CLASS_COLORS[0])
+                else:
+                    bars[i].set_color("#D0D3D9")
+            bar_note.set_text(f"top-{K} mined (red)")
+            return
+
+        # ---- Phase 4: gradient step — mined move outward ----
+        if f < T_SCATTER + T_MEASURE + T_MINE + T_STEP:
+            s = (f - T_SCATTER - T_MEASURE - T_MINE + 1) / T_STEP
+            e = _ease_inout(s)
+            p = pos.copy()
+            for j in topk:
+                p[j] = pos[j] + e * (step_end[j] - pos[j])
+            L_cur, d_cur = loss_at(p)
+
+            sizes, colors = dot_styles(L_cur, d_cur, fade_easy=True,
+                                       select_hard=True)
+            scat.set_offsets(p)
+            scat.set_sizes(sizes)
+            scat.set_facecolor(colors)
+
+            ring_scat.set_offsets(p[topk])
+            ring_scat.set_sizes([220] * K)
+            ring_scat.set_alpha(0.9)
+
+            # Gradient arrows: follow each mined negative as it moves.
+            for gi, j in enumerate(topk):
+                # Show arrow from current position outward.
+                u = pos[j] / max(d[j], 1e-6)
+                tail = p[j] + 0.18 * u
+                head = p[j] + (0.55 + 0.6 * (M - d[j])) * u * (1 - 0.8 * e)
+                if 1 - 0.8 * e > 0.2:
+                    grad_arrows[gi].set_positions(tail, head)
+                    grad_arrows[gi].set_alpha(0.9 * (1 - 0.7 * e))
+                else:
+                    grad_arrows[gi].set_alpha(0.0)
+
+            chapter.set_text("one gradient step — only the mined three move")
+            n_now_outside = int((d_cur[topk] >= M).sum())
+            footer.set_text(
+                f"after the step: {n_now_outside}/{K} mined negatives have "
+                "crossed the margin and their loss is now 0."
+            )
+
+            # Bars: update heights for mined ones.
+            vals_cur = L_cur
+            for i, j in enumerate(sort_idx):
+                bars[i].set_height(vals_cur[j])
+            return
+
+        # ---- Phase 5: final hold ----
+        p = pos.copy()
+        for j in topk:
+            p[j] = step_end[j]
+        L_cur, d_cur = loss_at(p)
+
+        sizes, colors = dot_styles(L_cur, d_cur, fade_easy=True,
+                                   select_hard=True)
+        scat.set_offsets(p)
+        scat.set_sizes(sizes)
+        scat.set_facecolor(colors)
+
+        ring_scat.set_offsets(p[topk])
+        ring_scat.set_sizes([220] * K)
+        ring_scat.set_alpha(0.9)
+        for ga in grad_arrows:
+            ga.set_alpha(0.0)
+
+        chapter.set_text("gradient signal, concentrated")
+        footer.set_text(
+            "same compute → larger effective step on the examples that matter."
+        )
+        for i, j in enumerate(sort_idx):
+            bars[i].set_height(L_cur[j])
+
+    anim = animation.FuncAnimation(
+        fig, update, frames=TOTAL, interval=1000 / fps, blit=False
+    )
+    save_animation(anim, out_path, fps=fps)
+    plt.close(fig)
+    print(f"wrote {out_path}  ({TOTAL} frames, {fps} fps, no loop)")
 def make_training_gif(out_path):   raise NotImplementedError
 
 
