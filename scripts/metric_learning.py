@@ -1303,7 +1303,299 @@ def make_mining_gif(out_path: Path,
     save_animation(anim, out_path, fps=fps)
     plt.close(fig)
     print(f"wrote {out_path}  ({TOTAL} frames, {fps} fps, no loop)")
-def make_training_gif(out_path):   raise NotImplementedError
+# --------------------------------------------------------------------------
+# 01e — training an MLP with pairwise contrastive hinge + hard mining
+# --------------------------------------------------------------------------
+
+def _run_training(n_per_arm=140, n_steps=500, save_every=3,
+                  batch=256, margin=0.9, lr=3e-3, seed=0,
+                  warmup_steps=60):
+    """Train an MLP with pairwise contrastive hinge loss.
+
+    The MLP ends in a Tanh so the embedding is bounded to [-1, 1]^2.  We
+    start with random negatives (warmup) and then switch to semi-hard
+    mining, which gives pedagogically-nice cluster formation without the
+    collapse failure mode seen with pure hard mining on normalised
+    embeddings.
+    """
+    import torch
+    import torch.nn as nn
+
+    torch.manual_seed(seed)
+    np_rng = np.random.default_rng(seed)
+
+    # Normalise the inputs so the MLP doesn't have to fight scale.
+    X_np_raw, y_np = spiral_galaxy(n_per_arm=n_per_arm, seed=seed)
+    X_np = X_np_raw / np.abs(X_np_raw).max()   # roughly in [-1, 1]^2
+    N = len(X_np)
+    X = torch.tensor(X_np, dtype=torch.float32)
+    y = y_np
+
+    net = nn.Sequential(
+        nn.Linear(2,   128), nn.ReLU(),
+        nn.Linear(128, 128), nn.ReLU(),
+        nn.Linear(128, 128), nn.ReLU(),
+        nn.Linear(128,   2),
+        nn.Tanh(),
+    )
+    for m in net:
+        if isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+            nn.init.zeros_(m.bias)
+    optim = torch.optim.Adam(net.parameters(), lr=lr)
+
+    class_idx = {k: np.where(y == k)[0] for k in np.unique(y)}
+    diff_pools = {k: np.concatenate([class_idx[j] for j in class_idx if j != k])
+                  for k in class_idx}
+
+    embeddings = []
+    losses = []
+    demos = []
+
+    for step in range(n_steps):
+        anchor_idx = np_rng.integers(0, N, batch)
+        y_a = y[anchor_idx]
+
+        # Positives: random same-class (not the anchor itself).
+        pos_idx = np.empty(batch, dtype=np.int64)
+        for i in range(batch):
+            same = class_idx[int(y_a[i])]
+            same = same[same != anchor_idx[i]]
+            pos_idx[i] = np_rng.choice(same)
+
+        # Negatives: random for warmup, semi-hard thereafter.
+        if step < warmup_steps:
+            neg_idx = np.empty(batch, dtype=np.int64)
+            for i in range(batch):
+                neg_idx[i] = np_rng.choice(diff_pools[int(y_a[i])])
+        else:
+            net.eval()
+            with torch.no_grad():
+                emb_all = net(X).numpy()
+            neg_idx = np.empty(batch, dtype=np.int64)
+            for i in range(batch):
+                pool = diff_pools[int(y_a[i])]
+                cand = np_rng.choice(pool, size=min(64, len(pool)),
+                                     replace=False)
+                d_an = np.linalg.norm(
+                    emb_all[cand] - emb_all[anchor_idx[i]], axis=1
+                )
+                # semi-hard: sample from the closer half of the pool
+                closer_half = cand[np.argsort(d_an)[: len(cand) // 2]]
+                neg_idx[i] = np_rng.choice(closer_half)
+
+        net.train()
+        e_a = net(X[anchor_idx])
+        e_p = net(X[pos_idx])
+        e_n = net(X[neg_idx])
+
+        d_ap = torch.linalg.norm(e_a - e_p, dim=1)
+        d_an = torch.linalg.norm(e_a - e_n, dim=1)
+        loss = (d_ap ** 2
+                + torch.clamp(margin - d_an, min=0) ** 2).mean()
+
+        optim.zero_grad()
+        loss.backward()
+        optim.step()
+
+        if step % save_every == 0:
+            with torch.no_grad():
+                emb = net(X).numpy()
+            embeddings.append(emb)
+            losses.append(float(loss.detach()))
+            demos.append(
+                (int(anchor_idx[0]), int(pos_idx[0]), int(neg_idx[0]))
+            )
+
+    return X_np_raw, y, embeddings, losses, demos
+
+
+def make_training_gif(out_path: Path,
+                      fps: int = DEFAULT_FPS,
+                      size: int = 720):
+    from matplotlib.patches import FancyArrowPatch
+
+    print("  training …")
+    X, y, embeddings, losses, demos = _run_training(
+        n_per_arm=140, n_steps=500, save_every=3,
+        batch=256, margin=0.9, lr=3e-3, seed=0, warmup_steps=60,
+    )
+    n_frames_train = len(embeddings)
+    n_hold = 30
+    TOTAL = n_frames_train + n_hold
+    print(f"  {n_frames_train} training snapshots + {n_hold} hold")
+
+    # Embeddings live in tanh ∈ [-1, 1]^2; add a small border.
+    emb_span = 1.15
+
+    # ----------------------------------------------------------------------
+    # Layout: two square panels side by side + thin loss strip.
+    # ----------------------------------------------------------------------
+    fig = plt.figure(figsize=(11.0, 6.8), dpi=100)
+    gs = fig.add_gridspec(
+        2, 2, width_ratios=[1.0, 1.0], height_ratios=[4.2, 1.0],
+        hspace=0.28, wspace=0.10,
+        left=0.05, right=0.97, top=0.83, bottom=0.09,
+    )
+    ax_in  = fig.add_subplot(gs[0, 0])
+    ax_em  = fig.add_subplot(gs[0, 1])
+    ax_ls  = fig.add_subplot(gs[1, :])
+
+    # Left: input space with the static spiral.
+    ax_in.set_xlim(-3.5, 3.5); ax_in.set_ylim(-3.5, 3.5)
+    ax_in.set_aspect("equal")
+    ax_in.set_xticks([]); ax_in.set_yticks([])
+    for s in ("left", "right", "top", "bottom"):
+        ax_in.spines[s].set_visible(False)
+    ax_in.set_title("input space", fontsize=11, color=MUTE, pad=6, loc="left")
+    in_colors = np.array([CLASS_COLORS[int(c)] for c in y])
+    ax_in.scatter(X[:, 0], X[:, 1], s=20, c=in_colors,
+                  edgecolors="white", linewidths=0.5, zorder=3)
+
+    # Optional triplet demo lines on the input side.
+    in_line_pos, = ax_in.plot([], [], color=CLASS_COLORS[1], lw=1.6,
+                              alpha=0.0, zorder=5)
+    in_line_neg, = ax_in.plot([], [], color=CLASS_COLORS[0], lw=1.6,
+                              alpha=0.0, zorder=5)
+    in_anchor_ring = ax_in.scatter([], [], s=160, facecolors="none",
+                                   edgecolors=FG, linewidths=1.8, zorder=6,
+                                   alpha=0.0)
+
+    # Right: embedding space.
+    ax_em.set_xlim(-emb_span, emb_span); ax_em.set_ylim(-emb_span, emb_span)
+    ax_em.set_aspect("equal")
+    ax_em.set_xticks([]); ax_em.set_yticks([])
+    for s in ("left", "right", "top", "bottom"):
+        ax_em.spines[s].set_visible(False)
+    ax_em.set_title("embedding space  $f(x) \\in [-1, 1]^2$",
+                    fontsize=11, color=MUTE, pad=6, loc="left")
+    # A light bounding square so the tanh region is visible.
+    ax_em.plot([-1, 1, 1, -1, -1], [-1, -1, 1, 1, -1],
+               color=MUTE, lw=1.0, ls="--", alpha=0.55, zorder=1)
+    em_scat = ax_em.scatter(
+        embeddings[0][:, 0], embeddings[0][:, 1],
+        s=20, c=in_colors, edgecolors="white", linewidths=0.5, zorder=3,
+    )
+
+    # Triplet demo on the embedding side: pull/push arrows.
+    pull_arrow = FancyArrowPatch((0, 0), (0, 0),
+                                 arrowstyle="-|>", mutation_scale=20,
+                                 lw=2.4, color="#2563EB", zorder=6, alpha=0.0)
+    push_arrow = FancyArrowPatch((0, 0), (0, 0),
+                                 arrowstyle="-|>", mutation_scale=20,
+                                 lw=2.4, color="#DC2626", zorder=6, alpha=0.0)
+    ax_em.add_patch(pull_arrow); ax_em.add_patch(push_arrow)
+    em_anchor_ring = ax_em.scatter([], [], s=180, facecolors="none",
+                                   edgecolors=FG, linewidths=1.8, zorder=6,
+                                   alpha=0.0)
+
+    # Bottom: loss strip.
+    ax_ls.set_xlim(0, n_frames_train - 1)
+    ax_ls.set_ylim(0, max(losses) * 1.1)
+    ax_ls.set_xticks([]); ax_ls.tick_params(labelsize=9)
+    for s in ("top", "right"):
+        ax_ls.spines[s].set_visible(False)
+    ax_ls.set_ylabel("loss", fontsize=10)
+    loss_line, = ax_ls.plot([], [], lw=2.2, color=FG)
+    loss_dot = ax_ls.scatter([], [], s=60, c=FG, edgecolors="white",
+                             lw=1.5, zorder=5)
+    step_label = ax_ls.text(0.98, 0.88, "", transform=ax_ls.transAxes,
+                            ha="right", va="top", fontsize=10, color=FG)
+
+    # Headers & footer.
+    fig.text(0.5, 0.955,
+             "Training:  pairwise hinge + hard negative mining",
+             ha="center", va="top", fontsize=15, fontweight="bold")
+    fig.text(0.5, 0.905,
+             "tanh-bounded MLP  $2 \\to 128^3 \\to 2$  "
+             "·  margin $m = 0.9$  ·  semi-hard negatives",
+             ha="center", va="top", fontsize=11, color=MUTE)
+    footer = fig.text(0.5, 0.025, "", ha="center", va="bottom",
+                      fontsize=10, color=FG)
+
+    # Highlight a triplet every DEMO_PERIOD frames for DEMO_LEN frames.
+    DEMO_PERIOD = 14
+    DEMO_LEN    = 7
+
+    def demo_alpha(k):
+        """Return an alpha in [0, 1] that pulses on a demo schedule."""
+        phase = k % DEMO_PERIOD
+        if phase >= DEMO_LEN:
+            return 0.0
+        # fade in then out over DEMO_LEN frames
+        t = phase / (DEMO_LEN - 1)
+        return float(np.sin(np.pi * t))
+
+    def update(f):
+        if f < n_frames_train:
+            k = f
+        else:
+            k = n_frames_train - 1
+            in_hold = True
+        in_hold = f >= n_frames_train
+
+        emb = embeddings[k]
+        em_scat.set_offsets(emb)
+
+        # Triplet demo.
+        if not in_hold:
+            ai, pi, ni = demos[k]
+            alpha = demo_alpha(k)
+        else:
+            alpha = 0.0
+
+        if alpha > 0.01:
+            # Input space: thin lines from anchor to positive/negative.
+            in_line_pos.set_data([X[ai, 0], X[pi, 0]], [X[ai, 1], X[pi, 1]])
+            in_line_neg.set_data([X[ai, 0], X[ni, 0]], [X[ai, 1], X[ni, 1]])
+            in_line_pos.set_alpha(0.65 * alpha)
+            in_line_neg.set_alpha(0.65 * alpha)
+            in_anchor_ring.set_offsets([X[ai]])
+            in_anchor_ring.set_alpha(alpha)
+
+            # Embedding space: arrows from anchor to its positive (pull)
+            # and from anchor to its negative (push, drawn as anchor -> neg
+            # reversed so it reads as "push away").
+            e_a = emb[ai]; e_p = emb[pi]; e_n = emb[ni]
+            pull_arrow.set_positions(e_a, e_p)
+            push_arrow.set_positions(e_a, e_n)
+            pull_arrow.set_alpha(0.9 * alpha)
+            push_arrow.set_alpha(0.9 * alpha)
+            em_anchor_ring.set_offsets([e_a])
+            em_anchor_ring.set_alpha(alpha)
+        else:
+            in_line_pos.set_alpha(0)
+            in_line_neg.set_alpha(0)
+            in_anchor_ring.set_alpha(0)
+            pull_arrow.set_alpha(0)
+            push_arrow.set_alpha(0)
+            em_anchor_ring.set_alpha(0)
+
+        # Loss strip.
+        xs = np.arange(k + 1)
+        loss_line.set_data(xs, losses[:k + 1])
+        loss_dot.set_offsets([[k, losses[k]]])
+
+        if in_hold:
+            step_label.set_text(f"step {k * 2}  ·  loss {losses[k]:.3f}")
+            footer.set_text(
+                "learned embedding  →  3 clean clusters; "
+                "a nearest neighbour query now respects class."
+            )
+        else:
+            step_label.set_text(f"step {k * 2}  ·  loss {losses[k]:.3f}")
+            footer.set_text(
+                "blue arrow pulls same-class pair together, "
+                "red arrow pushes hard negative past margin $m$"
+                if alpha > 0.5 else ""
+            )
+
+    anim = animation.FuncAnimation(
+        fig, update, frames=TOTAL, interval=1000 / fps, blit=False
+    )
+    save_animation(anim, out_path, fps=fps)
+    plt.close(fig)
+    print(f"wrote {out_path}  ({TOTAL} frames, {fps} fps, no loop)")
 
 
 # --------------------------------------------------------------------------
