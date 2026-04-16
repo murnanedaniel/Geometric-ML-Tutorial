@@ -78,6 +78,24 @@ def render(out_path: Path, fps: int = DEFAULT_FPS):
     cap = fig.text(0.5, 0.025, "", ha="center", va="bottom",
                    fontsize=11, color=FG)
 
+    # Legend — updates between training and reveal phases.
+    legend_text = fig.text(
+        0.05, 0.86, "", ha="left", va="top", fontsize=9,
+        color=FG, linespacing=1.6,
+        bbox=dict(boxstyle="round,pad=0.42", fc="white", ec=GRID, lw=0.9))
+    LEGEND_TRAIN = (
+        "\u25cf  grey = A  (fixed)\n"
+        "\u25c6  grey = B  (moves)\n"
+        "\u2192  arrow = gradient\n"
+        "\u2500  line = current match"
+    )
+    LEGEND_REVEAL = (
+        "\u25cf  colour = A pair identity\n"
+        "\u25c6  green = correct twin\n"
+        "\u25c6  red = wrong twin\n"
+        "\u25c6  grey = orphaned"
+    )
+
     SLOW_STEPS = 3
     SLOW_HOLD = 50       # ~3.6 s per slow step
     FAST_PER = 2         # 2 frames per remaining step
@@ -129,6 +147,7 @@ def render(out_path: Path, fps: int = DEFAULT_FPS):
             draw_B(step)
             draw_loss(step)
             show_grad(step)
+            legend_text.set_text(LEGEND_TRAIN)
             sub.set_text(f"step {step}: gradient arrows show where "
                          "each diamond will move")
             cap.set_text(f"Chamfer loss = {losses[snap_at(step)]:.2f}")
@@ -148,6 +167,7 @@ def render(out_path: Path, fps: int = DEFAULT_FPS):
                     match_lines[i].set_data([A[i, 0], B_cur[matching[i], 0]],
                                             [A[i, 1], B_cur[matching[i], 1]])
                     match_lines[i].set_alpha(0.4)
+            legend_text.set_text(LEGEND_TRAIN)
             sub.set_text(f"optimising (step {step})")
             cap.set_text(f"loss = {losses[snap_at(step)]:.2f}")
             return
@@ -159,30 +179,28 @@ def render(out_path: Path, fps: int = DEFAULT_FPS):
         f3 = f - SLOW_STEPS * SLOW_HOLD - n_fast * FAST_PER
         if f3 < REVEAL:
             t = (f3 + 1) / REVEAL
-            # Colour A by pair, B by whether it landed near correct A.
+            legend_text.set_text(LEGEND_REVEAL)
             sa.set_facecolor([pcols[i] for i in range(N)])
-            B_final = snaps[final_step][0]
             _, matching = snaps[final_step]
             b_show = []
             for j in range(N):
-                # Find which A(s) claimed this B.
                 claimers = [i for i in range(N) if matching is not None
                             and matching[i] == j]
                 if claimers:
-                    # Did any claimer have this as GT twin?
                     if any(gt[c] == j for c in claimers):
-                        b_show.append(np.array([0.18, 0.55, 0.34, t]))
+                        b_show.append(OK_COLOR)
                     else:
-                        b_show.append(np.array([0.78, 0.16, 0.16, t]))
+                        b_show.append(BAD_COLOR)
                 else:
                     b_show.append(GREY)
             sb.set_facecolor(b_show)
-            sub.set_text("restoring pair colours \u2026")
+            sub.set_text("verdict: did each diamond reach its true twin?")
             cap.set_text(""); return
 
         # --- Hold ---
+        legend_text.set_text(LEGEND_REVEAL)
         sa.set_facecolor(pcols)
-        sub.set_text("Chamfer optimisation: some B's land at wrong A")
+        sub.set_text("Chamfer optimisation: some B\u2019s land at wrong A")
         B_final, matching = snaps[final_step]
         n_ok = sum(1 for i in range(N) if matching is not None
                    and gt[i] == matching[i])
