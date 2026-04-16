@@ -9,23 +9,18 @@ numpy>=1.24,<2
 pandas>=2.0
 matplotlib>=3.7
 scikit-learn>=1.3
-tqdm>=4.65
 
-# Notebook 03 (Feynman-diagram GNN): PyTorch + PyG + networkx
+# Notebook 02 (crystal structure GNN) — needs PyTorch + PyG + materials stack
 torch>=2.0
 torch_geometric>=2.4
-networkx>=3.0
-
-# Notebook 02 (metallic glass GNN): materials informatics stack.
 # matminer 0.9.3+ is required for Z<=118 compatibility with modern pymatgen.
 matminer>=0.9.3
 # pymatgen 2024.6.10 is the last version matminer cleanly works with out of the box;
 # newer versions remove internals matminer depends on (e.g., _pt_data).
 pymatgen==2024.6.10
-# CHGNet universal interatomic potential (pretrained) for Part B of notebook 02.
-chgnet>=0.3
-# ASE is used by CHGNet's structural-relaxation calculator.
-ase>=3.22
+
+# Notebook 03 (Feynman-diagram GNN) — additionally needs networkx for graph visualisation
+networkx>=3.0
 
 # Jupyter (only needed if running locally; Colab has them preinstalled)
 jupyter>=1.0
