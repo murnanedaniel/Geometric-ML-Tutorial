@@ -16,8 +16,8 @@ def render(out_path: Path, fps: int = DEFAULT_FPS):
     # Run all three optimisations.
     ch_snaps = optimise_B(A, B, "chamfer",   n_steps=40, lr=0.08)
     hu_snaps = optimise_B(A, B, "hungarian", n_steps=40, lr=0.08)
-    sk_snaps = optimise_B(A, B, "sinkhorn",  n_steps=40, lr=0.08,
-                          eps_sink=0.15)
+    sk_snaps = optimise_B(A, B, "sinkhorn",  n_steps=80, lr=0.50,
+                          eps_sink=0.08)
 
     results = [
         ("ground truth", gt, B),

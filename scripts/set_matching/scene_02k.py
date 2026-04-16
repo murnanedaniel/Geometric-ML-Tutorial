@@ -14,8 +14,8 @@ def render(out_path: Path, fps: int = DEFAULT_FPS):
     N = len(A)
     pcols = pair_colors(N)
 
-    snaps = optimise_B(A, B, method="sinkhorn", n_steps=40,
-                       lr=0.08, eps_sink=0.15)
+    snaps = optimise_B(A, B, method="sinkhorn", n_steps=80,
+                       lr=0.50, eps_sink=0.08)
 
     fig = plt.figure(figsize=(7.6, 8.0), dpi=100)
     ax = fig.add_axes([0.04, 0.06, 0.92, 0.78])
