@@ -1,27 +1,23 @@
 # === Geometric ML Tutorial — dependencies ===
-# Tested end-to-end on Python 3.11 with the exact versions below.
-# Other version ranges are usually fine — the pins below are known-good.
+# Tested on Python 3.11 with numpy 2.x, pymatgen 2026.x, matminer 0.10.x.
 
-# Core scientific stack
-# IMPORTANT: numpy must be <2 because matminer imports a cython-compiled pymatgen
-# submodule that was built against numpy 1.x.
-numpy>=1.24,<2
-pandas>=2.0
-matplotlib>=3.7
-scikit-learn>=1.3
+# Core
+numpy
+pandas
+matplotlib
+scikit-learn
 
-# Notebook 02 (crystal structure GNN) — needs PyTorch + PyG + materials stack
+# Both notebooks
 torch>=2.0
 torch_geometric>=2.4
-# matminer 0.9.3+ is required for Z<=118 compatibility with modern pymatgen.
-matminer>=0.9.3
-# pymatgen 2024.6.10 is the last version matminer cleanly works with out of the box;
-# newer versions remove internals matminer depends on (e.g., _pt_data).
-pymatgen==2024.6.10
 
-# Notebook 03 (Feynman-diagram GNN) — additionally needs networkx for graph visualisation
+# Notebook 02 (crystal structure GNN)
+matminer>=0.9.3
+pymatgen
+
+# Notebook 03 (Feynman diagrams GNN) — additionally needs networkx
 networkx>=3.0
 
-# Jupyter (only needed if running locally; Colab has them preinstalled)
+# Jupyter (only needed if running locally)
 jupyter>=1.0
 ipykernel>=6.25

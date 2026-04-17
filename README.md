@@ -60,25 +60,13 @@ When opening a notebook, select the **"Python (geom-ml)"** kernel from the kerne
 
 ```bash
 # For notebook 02 (crystal structure) — needs the materials informatics stack:
-pip install 'numpy<2' pandas matplotlib scikit-learn \
-            torch torch_geometric \
-            'matminer>=0.9.3' 'pymatgen==2024.6.10' \
-            jupyter ipykernel
+pip install torch torch_geometric pymatgen matminer scikit-learn matplotlib pandas jupyter ipykernel
 
 # For notebook 03 (Feynman diagrams) — needs only PyTorch + PyG + networkx:
-pip install numpy pandas matplotlib scikit-learn \
-            torch torch_geometric networkx \
-            jupyter ipykernel
+pip install torch torch_geometric networkx scikit-learn matplotlib pandas jupyter ipykernel
 ```
 
-### ⚠️ Important version pins (notebook 02)
-
-Two version pins are **required** for notebook 02 to work:
-
-1. **`numpy<2`** — matminer imports a cython-compiled pymatgen submodule built against numpy 1.x. With numpy 2.x it fails with `numpy.core.multiarray failed to import`.
-2. **`pymatgen==2024.6.10`** + **`matminer>=0.9.3`** — newer pymatgen versions remove internals matminer depends on; and older matminer versions iterate to Z=119 which pymatgen doesn't know about.
-
-`requirements.txt` and the Colab install line already have these pins correct.
+No version pins are needed — the latest versions of all packages work together (tested with numpy 2.x, pymatgen 2026.x, matminer 0.10.x).
 
 ---
 
@@ -163,12 +151,6 @@ Each notebook ends with an "Extensions & Research Frontiers" section pointing to
 ## Troubleshooting
 
 **`NoSuchKernel: ...`** when opening a notebook — the committed notebooks specify a kernel name that your system may not have. Use the kernel menu in Jupyter to pick any Python 3 kernel, or follow the `ipykernel install` step in the Local Install section to register one.
-
-**`ImportError: cannot import name '_pt_data'` from pymatgen** — you have a pymatgen version newer than matminer supports. Pin `pymatgen==2024.6.10` (already set in `requirements.txt`).
-
-**`ValueError: Unexpected atomic number Z=119`** — you have `matminer<0.9.3`. Upgrade: `pip install 'matminer>=0.9.3'`.
-
-**`numpy.core.multiarray failed to import`** — you have numpy ≥ 2.x. Downgrade: `pip install 'numpy<2'`.
 
 **`flla` download fails** — transient issue with `ml.materialsproject.org`. Just re-run the cell. If it persists, manually download `flla.json.gz` from the Materials Project site and drop it into your matminer datasets directory.
 
